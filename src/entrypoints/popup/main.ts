@@ -4,10 +4,26 @@ import { browser } from 'wxt/browser';
 import { renderAuthUI, type AuthError } from './auth-ui';
 
 async function initPopup() {
-  const app = document.querySelector<HTMLDivElement>('#app')!;
-  app.innerHTML = '<p class="loading">Loading...</p>';
+  const app = document.querySelector<HTMLDivElement>('#app');
+  if (!app) {
+    console.error('Popup: #app element not found');
+    return;
+  }
+  const loading = document.createElement('p');
+  loading.className = 'auth-loading';
+  loading.textContent = 'Loading...';
+  app.replaceChildren(loading);
 
-  const { data: session, error } = await authClient.getSession();
+  let session: Awaited<ReturnType<typeof authClient.getSession>>['data'];
+  let error: Awaited<ReturnType<typeof authClient.getSession>>['error'];
+  try {
+    const result = await authClient.getSession();
+    session = result.data;
+    error = result.error;
+  } catch (err) {
+    session = null;
+    error = { message: (err as Error)?.message ?? 'Unknown error' };
+  }
 
   renderAuthUI(app, { session, error: (error ?? null) as AuthError }, {
     onSignIn: async () => {

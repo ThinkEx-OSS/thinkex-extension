@@ -30,35 +30,52 @@ export function renderAuthUI(
   const { session, error } = state;
 
   if (error) {
-    container.innerHTML = `
-      <div class="auth-card">
-        <p class="error">Error: ${error.message ?? 'Unknown error'}</p>
-      </div>
-    `;
+    const card = document.createElement('div');
+    card.className = 'auth-card';
+    const p = document.createElement('p');
+    p.className = 'auth-error';
+    p.textContent = `Error: ${error.message ?? 'Unknown error'}`;
+    card.appendChild(p);
+    container.replaceChildren(card);
     return;
   }
 
   if (session) {
-    const displayName = session.user.email ?? session.user.name ?? 'User';
-    container.innerHTML = `
-      <div class="auth-card">
-        <h2>Signed in</h2>
-        <p class="user-email">${displayName}</p>
-        <button id="sign-out" type="button">Sign out</button>
-      </div>
-    `;
-    document.getElementById('sign-out')?.addEventListener('click', () => {
+    const rawName = session.user.name?.trim();
+    const displayName = session.user.email ?? rawName ?? 'User';
+    const card = document.createElement('div');
+    card.className = 'auth-card';
+    const h2 = document.createElement('h2');
+    h2.textContent = 'Signed in';
+    const p = document.createElement('p');
+    p.className = 'auth-user-email';
+    p.textContent = displayName;
+    const btn = document.createElement('button');
+    btn.id = 'sign-out';
+    btn.type = 'button';
+    btn.className = 'btn btn-secondary';
+    btn.textContent = 'Sign out';
+    card.append(h2, p, btn);
+    container.replaceChildren(card);
+    btn.addEventListener('click', () => {
       callbacks.onSignOut();
     });
   } else {
-    container.innerHTML = `
-      <div class="auth-card">
-        <h2>Thinkex</h2>
-        <p class="auth-prompt">Sign in to continue</p>
-        <button id="sign-in-google" type="button">Sign in with Google</button>
-      </div>
-    `;
-    document.getElementById('sign-in-google')?.addEventListener('click', () => {
+    const card = document.createElement('div');
+    card.className = 'auth-card';
+    const h2 = document.createElement('h2');
+    h2.textContent = 'Thinkex';
+    const p = document.createElement('p');
+    p.className = 'auth-prompt';
+    p.textContent = 'Sign in to continue';
+    const btn = document.createElement('button');
+    btn.id = 'sign-in-google';
+    btn.type = 'button';
+    btn.className = 'btn btn-primary';
+    btn.textContent = 'Sign in with Google';
+    card.append(h2, p, btn);
+    container.replaceChildren(card);
+    btn.addEventListener('click', () => {
       callbacks.onSignIn();
     });
   }

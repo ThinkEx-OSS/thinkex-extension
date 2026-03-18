@@ -20,7 +20,7 @@ describe('renderAuthUI', () => {
   it('renders error state when error is present', () => {
     renderAuthUI(container, { session: null, error: new Error('Network failed') }, mockCallbacks);
 
-    expect(container.querySelector('.error')?.textContent).toBe('Error: Network failed');
+    expect(container.querySelector('.auth-error')?.textContent).toBe('Error: Network failed');
     expect(container.querySelector('#sign-in-google')).toBeNull();
     expect(container.querySelector('#sign-out')).toBeNull();
   });
@@ -35,7 +35,7 @@ describe('renderAuthUI', () => {
       mockCallbacks,
     );
 
-    expect(container.querySelector('.user-email')?.textContent).toBe('alice@example.com');
+    expect(container.querySelector('.auth-user-email')?.textContent).toBe('alice@example.com');
     expect(container.querySelector('#sign-out')).not.toBeNull();
     expect(container.querySelector('#sign-in-google')).toBeNull();
   });
@@ -50,7 +50,7 @@ describe('renderAuthUI', () => {
       mockCallbacks,
     );
 
-    expect(container.querySelector('.user-email')?.textContent).toBe('Bob');
+    expect(container.querySelector('.auth-user-email')?.textContent).toBe('Bob');
   });
 
   it('calls onSignOut when sign out button is clicked', async () => {

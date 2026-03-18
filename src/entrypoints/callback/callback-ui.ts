@@ -23,20 +23,29 @@ export function renderCallbackResult(
   const { session, error } = state;
 
   if (error) {
-    container.innerHTML = `
-      <p style="color: #ef4444;">Sign in failed: ${error.message ?? 'Unknown error'}</p>
-      <p>You can close this tab.</p>
-    `;
+    const p1 = document.createElement('p');
+    p1.style.color = '#ef4444';
+    p1.textContent = `Sign in failed: ${error.message ?? 'Unknown error'}`;
+    const p2 = document.createElement('p');
+    p2.textContent = 'You can close this tab.';
+    container.replaceChildren(p1, p2);
     return;
   }
 
   if (session?.user) {
-    const displayName = session.user.name ?? session.user.email ?? 'User';
-    container.innerHTML = `
-      <p style="color: #22c55e; font-weight: 600;">Successfully signed in as ${displayName}!</p>
-      <p style="color: #888;">You can close this tab and open the extension popup.</p>
-    `;
+    const rawName = session.user.name?.trim();
+    const displayName = rawName || session.user.email || 'User';
+    const p1 = document.createElement('p');
+    p1.style.color = '#22c55e';
+    p1.style.fontWeight = '600';
+    p1.textContent = `Successfully signed in as ${displayName}!`;
+    const p2 = document.createElement('p');
+    p2.style.color = '#888';
+    p2.textContent = 'You can close this tab and open the extension popup.';
+    container.replaceChildren(p1, p2);
   } else {
-    container.innerHTML = '<p>No session found. You can close this tab.</p>';
+    const p = document.createElement('p');
+    p.textContent = 'No session found. You can close this tab.';
+    container.replaceChildren(p);
   }
 }
