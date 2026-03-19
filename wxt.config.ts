@@ -1,8 +1,13 @@
 import { defineConfig } from 'wxt';
+import tailwindcss from '@tailwindcss/vite';
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
+  modules: ['@wxt-dev/module-react'],
   srcDir: 'src',
+  vite: () => ({
+    plugins: [tailwindcss()],
+  }),
   dev: {
     server: { port: 5173 },
   },
@@ -15,7 +20,17 @@ export default defineConfig({
   manifest: () => ({
     host_permissions: [
       `${import.meta.env.WXT_BETTER_AUTH_BASE_URL || 'http://localhost:3000'}/*`,
+      'https://*/*',
     ],
     permissions: ['storage'],
+    web_accessible_resources: [
+      {
+        resources: ['callback.html'],
+        matches: [
+          `${import.meta.env.WXT_BETTER_AUTH_BASE_URL || 'http://localhost:3000'}/*`,
+          'https://thinkex.app/*',
+        ],
+      },
+    ],
   }),
 });
