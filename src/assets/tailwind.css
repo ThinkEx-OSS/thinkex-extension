@@ -1,1 +1,31 @@
 @import "tailwindcss";
+
+@theme inline {
+  /* Sidebar tokens — dark theme values baked in (shadow DOM can't inherit parent CSS vars) */
+  --color-sidebar:                    hsl(240 5.9% 10%);
+  --color-sidebar-foreground:         hsl(240 4.8% 95.9%);
+  --color-sidebar-primary:            hsl(224.3 76.3% 48%);
+  --color-sidebar-primary-foreground: hsl(0 0% 100%);
+  --color-sidebar-accent:             hsl(240 3.7% 15.9%);
+  --color-sidebar-accent-foreground:  hsl(240 4.8% 95.9%);
+  --color-sidebar-border:             hsl(240 3.7% 15.9%);
+  --color-sidebar-ring:               hsl(217.2 91.2% 59.8%);
+
+  /* General tokens */
+  --color-background:           hsl(0 0% 12%);
+  --color-foreground:           hsl(240 4.8% 95.9%);
+  --color-primary:              hsl(0 0% 98%);
+  --color-primary-foreground:   hsl(0 0% 9%);
+  --color-secondary:            hsl(0 0% 14.9%);
+  --color-secondary-foreground: hsl(0 0% 98%);
+  --color-muted:                hsl(0 0% 14.9%);
+  --color-muted-foreground:     hsl(0 0% 63.9%);
+  --color-accent:               hsl(0 0% 14.9%);
+  --color-accent-foreground:    hsl(0 0% 98%);
+  --color-border:               hsl(0 0% 25%);
+  --color-input:                oklch(1 0 0 / 15%);
+  --color-ring:                 oklch(0.551 0.027 264.364);
+  --color-destructive:          oklch(0.704 0.191 22.216);
+  --color-popover:              hsl(0 0% 12%);
+  --color-popover-foreground:   hsl(240 4.8% 95.9%);
+}
