@@ -31,6 +31,10 @@ export default defineConfig({
           'https://thinkex.app/*',
         ],
       },
+      {
+        resources: ['ThinkExLogo.svg'],
+        matches: ['https://*/*'],
+      },
     ],
   }),
 });

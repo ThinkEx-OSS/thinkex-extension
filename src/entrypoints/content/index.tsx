@@ -19,7 +19,7 @@ async function isSessionActive(): Promise<boolean> {
 
 async function getSavedDomains(): Promise<string[]> {
   const result = await browser.storage.sync.get(STORAGE_KEY)
-  return result[STORAGE_KEY] ?? []
+  return (result[STORAGE_KEY] as string[] | undefined) ?? []
 }
 
 async function saveDomain(domain: string): Promise<void> {

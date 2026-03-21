@@ -20,11 +20,11 @@ export default defineBackground(() => {
       return true;
     }
 
-    if (message.type === 'FETCH_WORKSPACE_EVENTS') {
-      fetch(`${BASE_URL}/api/workspaces/${message.id}/events`, { credentials: 'include' })
+    if (message.type === 'FETCH_WORKSPACE_FOLDERS') {
+      fetch(`${BASE_URL}/api/workspaces/${message.id}/folders`, { credentials: 'include' })
         .then((r) => r.json())
-        .then((data) => sendResponse({ snapshot: data.snapshot ?? null }))
-        .catch(() => sendResponse({ snapshot: null }));
+        .then((data) => sendResponse({ folders: data.folders ?? [] }))
+        .catch(() => sendResponse({ folders: [] }));
       return true;
     }
 
