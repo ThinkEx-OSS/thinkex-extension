@@ -52,9 +52,11 @@ function buildFolderTree(folders: FolderItem[], parentId?: string): FolderTreeIt
     })
 }
 
-function getSelectedPdfCount(): number {
+function getSelectedDocumentCount(): number {
   return document.querySelectorAll(
-    '.ef-item-row[aria-selected="true"] .mimeClass-pdf'
+    '.ef-item-row[aria-selected="true"] .mimeClass-pdf, ' +
+    '.ef-item-row[aria-selected="true"] .mimeClass-doc, ' +
+    '.ef-item-row[aria-selected="true"] .mimeClass-ppt'
   ).length
 }
 
@@ -230,13 +232,13 @@ export function ExtensionSidebar() {
 
     function setupObserver(directory: Element) {
       selectionObserver?.disconnect()
-      selectionObserver = new MutationObserver(() => setCount(getSelectedPdfCount()))
+      selectionObserver = new MutationObserver(() => setCount(getSelectedDocumentCount()))
       selectionObserver.observe(directory, {
         attributes: true,
         attributeFilter: ["aria-selected"],
         subtree: true,
       })
-      setCount(getSelectedPdfCount())
+      setCount(getSelectedDocumentCount())
     }
 
     const existing = document.querySelector(".ef-directory")
@@ -531,7 +533,7 @@ export function ExtensionSidebar() {
                 alt="ThinkEx"
               />
               <p className="text-xs text-sidebar-foreground/50 text-center">
-                Sign in to send PDFs to ThinkEx
+                Sign in to send documents to ThinkEx
               </p>
               <button
                 disabled={signingIn}
@@ -648,8 +650,8 @@ export function ExtensionSidebar() {
         <div className="px-3 pt-2.5 pb-3 border-t border-sidebar-border shrink-0 flex flex-col gap-2">
           <p className="text-[11px] text-sidebar-foreground/40 text-center">
             {count === 0
-              ? "No PDFs selected"
-              : `${count} PDF${count === 1 ? "" : "s"} selected`}
+              ? "No documents selected"
+              : `${count} document${count === 1 ? "" : "s"} selected`}
             {selectedFolderId ? null : <span className="ml-1 text-sidebar-foreground/25">· select a destination</span>}
           </p>
           <Button
@@ -660,7 +662,7 @@ export function ExtensionSidebar() {
               if (!canSend) return
               console.log("[ThinkEx] Send:", {
                 destination: selectedFolderId,
-                pdfCount: count,
+                documentCount: count,
               })
             }}
           >
