@@ -7,15 +7,7 @@ import "@/assets/tailwind.css"
 const STORAGE_KEY = "canvas_domains"
 const BANNER_KEY = "banner_enabled"
 
-// ── Auth + Canvas detection ───────────────────────────────────────────────────
-
-async function isSessionActive(): Promise<boolean> {
-  return new Promise((resolve) => {
-    browser.runtime.sendMessage({ type: "GET_SESSION" }, (response) => {
-      resolve(!!response?.session?.user)
-    })
-  })
-}
+// ── Canvas detection ──────────────────────────────────────────────────────────
 
 async function getSavedDomains(): Promise<string[]> {
   const result = await browser.storage.sync.get(STORAGE_KEY)
@@ -47,9 +39,6 @@ export default defineContentScript({
   cssInjectionMode: "ui",
 
   async main(ctx) {
-    const signedIn = await isSessionActive()
-    if (!signedIn) return
-
     const enabled = await browser.storage.sync.get(BANNER_KEY)
     if (enabled[BANNER_KEY] === false) return
 

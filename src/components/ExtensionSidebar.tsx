@@ -147,11 +147,20 @@ function FolderTree({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ExtensionSidebar() {
+  // Session state
+  const [session, setSession] = React.useState<{ user: { email: string; name?: string } } | null>(null)
+  const [sessionLoading, setSessionLoading] = React.useState(true)
+  const [signingIn, setSigningIn] = React.useState(false)
+  const pollRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Extension state
   const [enabled, setEnabled] = React.useState(true)
   const [count, setCount] = React.useState(0)
   const [expanded, setExpanded] = React.useState(false)
   const [tabTop, setTabTop] = React.useState<number | null>(null)
+
+  // Search
+  const [searchQuery, setSearchQuery] = React.useState("")
 
   // Workspace + folder data
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([])
@@ -181,13 +190,23 @@ export function ExtensionSidebar() {
     return () => browser.storage.onChanged.removeListener(listener)
   }, [])
 
+  // ── Session check ───────────────────────────────────────────────────────
+  React.useEffect(() => {
+    browser.runtime.sendMessage({ type: "GET_SESSION" }, (response) => {
+      setSession(response?.session?.user ? response.session : null)
+      setSessionLoading(false)
+    })
+    return () => { if (pollRef.current) clearTimeout(pollRef.current) }
+  }, [])
+
   // ── Fetch workspace list ────────────────────────────────────────────────
   React.useEffect(() => {
+    if (!session) return
     browser.runtime.sendMessage({ type: "FETCH_WORKSPACES" }, (response) => {
       setWorkspaces(response?.workspaces ?? [])
       setWorkspacesLoading(false)
     })
-  }, [])
+  }, [session])
 
   // ── Prefetch folders as soon as workspaces load (if banner is enabled) ──
   React.useEffect(() => {
@@ -300,6 +319,31 @@ export function ExtensionSidebar() {
     }
   }, [expanded])
 
+  // ── Sign in ─────────────────────────────────────────────────────────────
+  const handleSignIn = React.useCallback(() => {
+    setSigningIn(true)
+    browser.runtime.sendMessage(
+      { type: "SIGN_IN_SOCIAL", callbackURL: browser.runtime.getURL("/callback.html" as any) },
+      (response) => {
+        const url = response?.url
+        if (url) window.open(url, "_blank")
+
+        // Poll until session appears
+        const poll = () => {
+          browser.runtime.sendMessage({ type: "GET_SESSION" }, (res) => {
+            if (res?.session?.user) {
+              setSession(res.session)
+              setSigningIn(false)
+            } else {
+              pollRef.current = setTimeout(poll, 1500)
+            }
+          })
+        }
+        pollRef.current = setTimeout(poll, 1500)
+      }
+    )
+  }, [])
+
   // ── Select workspace as destination ────────────────────────────────────
   const selectWorkspace = React.useCallback((wsId: string) => {
     setSelectedFolderId((prev) => (prev === wsId ? null : wsId))
@@ -351,6 +395,12 @@ export function ExtensionSidebar() {
     () => new Set([...openWorkspaceIds, ...openFolderIds]),
     [openWorkspaceIds, openFolderIds]
   )
+
+  const filteredWorkspaces = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return workspaces
+    return workspaces.filter((ws) => ws.name.toLowerCase().includes(q))
+  }, [searchQuery, workspaces])
 
   const canSend = !!selectedFolderId && count > 0
 
@@ -449,6 +499,19 @@ export function ExtensionSidebar() {
           </button>
         </div>
 
+        {/* Search bar — fixed between header and list */}
+        {session && (
+          <div className="px-3 py-2 border-b border-sidebar-border shrink-0">
+            <input
+              type="text"
+              placeholder="Search workspaces…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-sidebar-accent/40 text-xs text-sidebar-foreground placeholder:text-sidebar-foreground/30 rounded-md px-3 py-1.5 outline-none focus:ring-1 focus:ring-sidebar-primary border border-sidebar-border"
+            />
+          </div>
+        )}
+
         {/* Workspace + folder tree — scrollable */}
         <div
           className="flex-1 overflow-y-auto py-3 px-3 flex flex-col gap-2"
@@ -457,13 +520,48 @@ export function ExtensionSidebar() {
             scrollbarColor: "hsl(240 3.7% 25%) transparent",
           }}
         >
-          {workspacesLoading ? (
+          {sessionLoading ? (
             <p className="px-1 py-2 text-[12px] text-sidebar-foreground/40">Loading…</p>
-          ) : workspaces.length === 0 ? (
-            <p className="px-1 py-2 text-[12px] text-sidebar-foreground/40 italic">No workspaces found</p>
+          ) : !session ? (
+            <div className="flex flex-col items-center justify-center flex-1 gap-4 py-8 px-2">
+              <img
+                src={browser.runtime.getURL("ThinkExLogo.svg" as any)}
+                width={40}
+                height={40}
+                alt="ThinkEx"
+              />
+              <p className="text-xs text-sidebar-foreground/50 text-center">
+                Sign in to send PDFs to ThinkEx
+              </p>
+              <button
+                disabled={signingIn}
+                onClick={handleSignIn}
+                className="w-full flex items-center justify-center gap-2 bg-white text-black text-xs font-semibold rounded-lg px-3 py-2 hover:bg-neutral-100 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {signingIn ? (
+                  "Waiting for sign in…"
+                ) : (
+                  <>
+                    <svg width="14" height="14" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+                      <path fill="#EA4335" d="M24 9.5c3.14 0 5.95 1.08 8.17 2.85l6.09-6.09C34.46 3.19 29.53 1 24 1 14.82 1 7.07 6.48 3.64 14.18l7.09 5.51C12.44 13.61 17.76 9.5 24 9.5z"/>
+                      <path fill="#4285F4" d="M46.52 24.5c0-1.64-.15-3.22-.42-4.75H24v9h12.7c-.55 2.96-2.2 5.47-4.68 7.15l7.18 5.57C43.35 37.28 46.52 31.36 46.52 24.5z"/>
+                      <path fill="#FBBC05" d="M10.73 28.31A14.6 14.6 0 0 1 9.5 24c0-1.49.26-2.93.73-4.31l-7.09-5.51A23.93 23.93 0 0 0 0 24c0 3.86.92 7.51 2.54 10.73l8.19-6.42z"/>
+                      <path fill="#34A853" d="M24 47c5.53 0 10.17-1.83 13.56-4.97l-7.18-5.57C28.6 37.92 26.43 38.5 24 38.5c-6.24 0-11.56-4.11-13.27-9.69l-8.19 6.42C6.07 43.52 14.45 47 24 47z"/>
+                    </svg>
+                    Continue with Google
+                  </>
+                )}
+              </button>
+            </div>
+          ) : workspacesLoading ? (
+            <p className="px-1 py-2 text-[12px] text-sidebar-foreground/40">Loading…</p>
+          ) : filteredWorkspaces.length === 0 ? (
+            <p className="px-1 py-2 text-[12px] text-sidebar-foreground/40 italic">
+              {searchQuery.trim() ? "No workspaces match your search" : "No workspaces found"}
+            </p>
           ) : (
             <SidebarMenu>
-              {workspaces.map((ws) => {
+              {filteredWorkspaces.map((ws) => {
                 const isOpen = openWorkspaceIds.has(ws.id)
                 const rawFolders = foldersByWorkspace[ws.id]
                 const folders = rawFolders ? buildFolderTree(rawFolders) : null

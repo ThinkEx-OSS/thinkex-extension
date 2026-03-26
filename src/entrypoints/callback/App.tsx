@@ -13,7 +13,7 @@ export default function App() {
                 if (data?.user) {
                     setDisplayName(data.user.name?.trim() || data.user.email || 'User');
                     setStatus('success');
-                    if (window.opener === null) setTimeout(() => window.close(), 2000);
+                    setTimeout(() => window.close(), 2000);
                 } else { setStatus('empty'); }
             })
             .catch((err) => { setErrorMsg(err?.message ?? 'Unknown error'); setStatus('error'); });

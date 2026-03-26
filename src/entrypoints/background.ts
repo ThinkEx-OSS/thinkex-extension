@@ -12,6 +12,20 @@ export default defineBackground(() => {
       return true;
     }
 
+    if (message.type === 'SIGN_IN_SOCIAL') {
+      let redirectUrl: string | null = null;
+      authClient.signIn.social({
+        provider: 'google',
+        callbackURL: message.callbackURL,
+        fetchOptions: {
+          onSuccess: (ctx: any) => { redirectUrl = ctx.data?.url ?? null; },
+        },
+      })
+        .then(() => sendResponse({ url: redirectUrl }))
+        .catch(() => sendResponse({ url: null }));
+      return true;
+    }
+
     if (message.type === 'FETCH_WORKSPACES') {
       fetch(`${BASE_URL}/api/workspaces`, { credentials: 'include' })
         .then((r) => r.json())
