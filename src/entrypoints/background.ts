@@ -42,5 +42,44 @@ export default defineBackground(() => {
       return true;
     }
 
+    if (message.type === 'GET_UPLOAD_URL') {
+      fetch(`${BASE_URL}/api/upload-url`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: message.filename, contentType: message.contentType }),
+      })
+        .then((r) => r.json())
+        .then((data) => sendResponse({ ok: true, data }))
+        .catch((err) => sendResponse({ ok: false, error: err?.message ?? 'Unknown error' }));
+      return true;
+    }
+
+if (message.type === 'CONVERT_TO_PDF') {
+      fetch(`${BASE_URL}/api/office-conversion/convert-to-pdf`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_path: message.filePath, file_url: message.fileUrl }),
+      })
+        .then((r) => r.json())
+        .then((data) => sendResponse({ ok: true, data }))
+        .catch((err) => sendResponse({ ok: false, error: err?.message ?? 'Unknown error' }));
+      return true;
+    }
+
+    if (message.type === 'IMPORT_FILES') {
+      fetch(`${BASE_URL}/api/workspaces/${message.workspaceId}/import`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files: message.files }),
+      })
+        .then((r) => r.json())
+        .then((data) => sendResponse({ ok: true, data }))
+        .catch((err) => sendResponse({ ok: false, error: err?.message ?? 'Unknown error' }));
+      return true;
+    }
+
   });
 });

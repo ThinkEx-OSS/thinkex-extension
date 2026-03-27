@@ -53,11 +53,86 @@ function buildFolderTree(folders: FolderItem[], parentId?: string): FolderTreeIt
 }
 
 function getSelectedDocumentCount(): number {
-  return document.querySelectorAll(
+  // Old Canvas UI (Ember-based)
+  const oldCount = document.querySelectorAll(
     '.ef-item-row[aria-selected="true"] .mimeClass-pdf, ' +
     '.ef-item-row[aria-selected="true"] .mimeClass-doc, ' +
     '.ef-item-row[aria-selected="true"] .mimeClass-ppt'
   ).length
+
+  // New Canvas UI (React-based) — selection shown by IconCheckMark SVG presence
+  const newCount = Array.from(
+    document.querySelectorAll<HTMLElement>('tr[data-testid="table-row"]')
+  ).filter((row) => {
+    if (!row.querySelector('svg[name="IconCheckMark"]')) return false
+    const name = row.querySelector<HTMLAnchorElement>('[data-testid="table-cell-name"] a')?.getAttribute('data-testid') ?? ''
+    return /\.(pdf|docx?|pptx?)$/i.test(name)
+  }).length
+
+  return oldCount + newCount
+}
+
+function getSelectedFiles(): Array<{ url: string; name: string }> {
+  // Old Canvas UI (Ember-based)
+  const oldFiles = Array.from(
+    document.querySelectorAll<HTMLElement>('.ef-item-row[aria-selected="true"]')
+  ).flatMap((row) => {
+    const url = row.querySelector<HTMLAnchorElement>('.ef-name-col__link')?.getAttribute('href')
+    const name = row.querySelector<HTMLElement>('.ef-name-col__text')?.textContent?.trim()
+    if (!url || !name) return []
+    return [{ url, name }]
+  })
+
+  // New Canvas UI (React-based) — selection shown by IconCheckMark SVG presence
+  const newFiles = Array.from(
+    document.querySelectorAll<HTMLElement>('tr[data-testid="table-row"]')
+  ).flatMap((row) => {
+    if (!row.querySelector('svg[name="IconCheckMark"]')) return []
+    const anchor = row.querySelector<HTMLAnchorElement>('[data-testid="table-cell-name"] a')
+    if (!anchor) return []
+    const name = anchor.getAttribute('data-testid')
+    const href = anchor.getAttribute('href')
+    if (!name || !href) return []
+    const previewMatch = href.match(/[?&]preview=(\d+)/)
+    if (!previewMatch) return []
+    const url = `${window.location.origin}/files/${previewMatch[1]}/download?download_frd=1`
+    return [{ url, name }]
+  })
+
+  return [...oldFiles, ...newFiles]
+}
+
+function mimeTypeFromFilename(name: string): string {
+  const lower = name.toLowerCase()
+  if (lower.endsWith('.pdf'))  return 'application/pdf'
+  if (lower.endsWith('.docx')) return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  if (lower.endsWith('.doc'))  return 'application/msword'
+  if (lower.endsWith('.pptx')) return 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+  if (lower.endsWith('.ppt'))  return 'application/vnd.ms-powerpoint'
+  return 'application/octet-stream'
+}
+
+function isOfficeFile(name: string): boolean {
+  const lower = name.toLowerCase()
+  return lower.endsWith('.docx') || lower.endsWith('.doc') ||
+         lower.endsWith('.pptx') || lower.endsWith('.ppt')
+}
+
+function toPdfName(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return (dot !== -1 ? name.slice(0, dot) : name) + '.pdf'
+}
+
+function sendMessage<T>(msg: Record<string, unknown>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    browser.runtime.sendMessage(msg, (response) => {
+      if (browser.runtime.lastError) {
+        reject(new Error(browser.runtime.lastError.message))
+      } else {
+        resolve(response as T)
+      }
+    })
+  })
 }
 
 // ── Folder tree component ─────────────────────────────────────────────────────
@@ -161,6 +236,12 @@ export function ExtensionSidebar() {
   const [expanded, setExpanded] = React.useState(false)
   const [tabTop, setTabTop] = React.useState<number | null>(null)
 
+  // Send state
+  const [sending, setSending] = React.useState(false)
+  const [sendError, setSendError] = React.useState<string | null>(null)
+  const [sendSuccess, setSendSuccess] = React.useState(false)
+  const [sendProgress, setSendProgress] = React.useState<{ current: number; total: number } | null>(null)
+
   // Search
   const [searchQuery, setSearchQuery] = React.useState("")
 
@@ -226,14 +307,14 @@ export function ExtensionSidebar() {
     })
   }, [enabled, workspaces])
 
-  // ── Watch .ef-directory for PDF selection changes ───────────────────────
+  // ── Watch Canvas file list for selection changes (old + new UI) ─────────
   React.useEffect(() => {
     let selectionObserver: MutationObserver | null = null
 
-    function setupObserver(directory: Element) {
+    function setupObserverOld(container: Element) {
       selectionObserver?.disconnect()
       selectionObserver = new MutationObserver(() => setCount(getSelectedDocumentCount()))
-      selectionObserver.observe(directory, {
+      selectionObserver.observe(container, {
         attributes: true,
         attributeFilter: ["aria-selected"],
         subtree: true,
@@ -241,23 +322,43 @@ export function ExtensionSidebar() {
       setCount(getSelectedDocumentCount())
     }
 
-    const existing = document.querySelector(".ef-directory")
-    if (existing) setupObserver(existing)
+    function setupObserverNew(container: Element) {
+      selectionObserver?.disconnect()
+      selectionObserver = new MutationObserver(() => setCount(getSelectedDocumentCount()))
+      // childList: true to detect svg[name="IconCheckMark"] being inserted/removed
+      selectionObserver.observe(container, { childList: true, subtree: true })
+      setCount(getSelectedDocumentCount())
+    }
+
+    // Old UI: .ef-directory with aria-selected
+    const existingOld = document.querySelector(".ef-directory")
+    if (existingOld) setupObserverOld(existingOld)
+
+    // New UI: files-table — detect checkmark SVG insertion/removal (React doesn't reflect "checked" to DOM)
+    const existingNew = document.querySelector('table[data-testid="files-table"]')
+      ?? document.querySelector('tr[data-testid="table-row"]')?.closest('table')
+    if (existingNew && !existingOld) setupObserverNew(existingNew)
 
     const directoryObserver = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
           if (!(node instanceof Element)) continue
-          const dir = node.classList.contains("ef-directory")
+          const oldDir = node.classList.contains("ef-directory")
             ? node
             : node.querySelector(".ef-directory")
-          if (dir) setupObserver(dir)
+          if (oldDir) { setupObserverOld(oldDir); continue }
+          const newTable = node.getAttribute?.("data-testid") === "files-table"
+            ? node
+            : node.querySelector?.('table[data-testid="files-table"]')
+          if (newTable) setupObserverNew(newTable)
         }
         for (const node of mutation.removedNodes) {
           if (!(node instanceof Element)) continue
           if (
             node.classList.contains("ef-directory") ||
-            node.querySelector?.(".ef-directory")
+            node.querySelector?.(".ef-directory") ||
+            node.getAttribute?.("data-testid") === "files-table" ||
+            node.querySelector?.('table[data-testid="files-table"]')
           ) {
             selectionObserver?.disconnect()
             selectionObserver = null
@@ -404,7 +505,110 @@ export function ExtensionSidebar() {
     return workspaces.filter((ws) => ws.name.toLowerCase().includes(q))
   }, [searchQuery, workspaces])
 
-  const canSend = !!selectedFolderId && count > 0
+  const canSend = !!selectedFolderId && count > 0 && !sending
+
+  // ── Send handler ────────────────────────────────────────────────────────
+  const handleSend = React.useCallback(async () => {
+    if (!selectedFolderId) return
+
+    // Resolve workspaceId + folderId from selectedFolderId
+    let destWorkspaceId: string | null = null
+    let destFolderId: string | undefined = undefined
+
+    const selectedWs = workspaces.find((ws) => ws.id === selectedFolderId)
+    if (selectedWs) {
+      destWorkspaceId = selectedWs.id
+    } else {
+      for (const [wsId, folders] of Object.entries(foldersByWorkspace)) {
+        if (folders.some((f) => f.id === selectedFolderId)) {
+          destWorkspaceId = wsId
+          destFolderId = selectedFolderId
+          break
+        }
+      }
+    }
+
+    if (!destWorkspaceId) return
+
+    const selectedFiles = getSelectedFiles()
+    if (selectedFiles.length === 0) return
+
+    setSending(true)
+    setSendError(null)
+    setSendSuccess(false)
+    setSendProgress({ current: 0, total: selectedFiles.length })
+
+    try {
+      type UploadUrlResponse = { ok: boolean; data: any; error?: string }
+      const importFiles: Array<{
+        storagePath: string; publicUrl: string
+        displayName: string; mimeType: string; folderId?: string
+      }> = []
+
+      for (let fileIdx = 0; fileIdx < selectedFiles.length; fileIdx++) {
+        const file = selectedFiles[fileIdx]
+        setSendProgress({ current: fileIdx, total: selectedFiles.length })
+        const mimeType = mimeTypeFromFilename(file.name)
+
+        // 1. Download file from Canvas (content script has Canvas session cookies)
+        const canvasResp = await fetch(file.url, { credentials: 'include' })
+        if (!canvasResp.ok) throw new Error(`Failed to download "${file.name}" from Canvas`)
+        const blob = await canvasResp.blob()
+
+        // 2. Get upload URL via background (background has ThinkEx session cookies)
+        const urlResult = await sendMessage<UploadUrlResponse>({
+          type: 'GET_UPLOAD_URL', filename: file.name, contentType: mimeType,
+        })
+        if (!urlResult.ok) throw new Error(`Upload URL error for "${file.name}": ${urlResult.error}`)
+
+        const { signedUrl, publicUrl, path } = urlResult.data
+
+        // 3. PUT directly to Supabase — pre-signed, no auth needed
+        const putResp = await fetch(signedUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': mimeType },
+          body: blob,
+        })
+        if (!putResp.ok) throw new Error(`Storage upload failed for "${file.name}"`)
+        const storagePath = path
+        const storageUrl = publicUrl
+
+        // 4. Convert office files to PDF via ThinkEx engine
+        let finalPath = storagePath
+        let finalUrl = storageUrl
+        let finalMime = mimeType
+        let finalName = file.name
+
+        if (isOfficeFile(file.name)) {
+          const convResult = await sendMessage<UploadUrlResponse>({
+            type: 'CONVERT_TO_PDF', filePath: storagePath, fileUrl: storageUrl,
+          })
+          if (!convResult.ok) throw new Error(`Conversion failed for "${file.name}": ${convResult.error}`)
+          finalPath = convResult.data.pdf_path
+          finalUrl = convResult.data.pdf_url
+          finalMime = 'application/pdf'
+          finalName = toPdfName(file.name)
+        }
+
+        importFiles.push({ storagePath: finalPath, publicUrl: finalUrl, displayName: finalName, mimeType: finalMime, folderId: destFolderId })
+      }
+
+      // 4. Import all files into ThinkEx workspace
+      setSendProgress(null)
+      const importResult = await sendMessage<UploadUrlResponse>({
+        type: 'IMPORT_FILES', workspaceId: destWorkspaceId, files: importFiles,
+      })
+      if (!importResult.ok) throw new Error(`Import failed: ${importResult.error}`)
+
+      setSendSuccess(true)
+      setTimeout(() => setSendSuccess(false), 3000)
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : 'Send failed')
+    } finally {
+      setSending(false)
+      setSendProgress(null)
+    }
+  }, [selectedFolderId, workspaces, foldersByWorkspace])
 
   if (!enabled) return null
 
@@ -646,7 +850,7 @@ export function ExtensionSidebar() {
           )}
         </div>
 
-        {/* Footer — sticky, PDF count + Send button */}
+        {/* Footer — sticky, document count + Send button */}
         <div className="px-3 pt-2.5 pb-3 border-t border-sidebar-border shrink-0 flex flex-col gap-2">
           <p className="text-[11px] text-sidebar-foreground/40 text-center">
             {count === 0
@@ -658,16 +862,22 @@ export function ExtensionSidebar() {
             className="w-full"
             size="sm"
             disabled={!canSend}
-            onClick={() => {
-              if (!canSend) return
-              console.log("[ThinkEx] Send:", {
-                destination: selectedFolderId,
-                documentCount: count,
-              })
-            }}
+            onClick={handleSend}
           >
-            Send to ThinkEx
+            {sendProgress
+              ? `Uploading ${sendProgress.current + 1} of ${sendProgress.total}…`
+              : sending
+              ? "Sending…"
+              : "Send to ThinkEx"}
           </Button>
+          {sendSuccess && (
+            <p className="text-[11px] text-green-400 text-center leading-tight">
+              {`Sent ${count} document${count === 1 ? "" : "s"} to ThinkEx`}
+            </p>
+          )}
+          {sendError && (
+            <p className="text-[11px] text-red-400 text-center leading-tight">{sendError}</p>
+          )}
         </div>
       </div>
     </SidebarProvider>
