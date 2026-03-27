@@ -325,7 +325,7 @@ export function ExtensionSidebar() {
     function setupObserverNew(container: Element) {
       selectionObserver?.disconnect()
       selectionObserver = new MutationObserver(() => setCount(getSelectedDocumentCount()))
-      // childList: true to detect svg[name="IconCheckMark"] being inserted/removed
+      // childList: true to detect svg[name="IconCheckMark"] being inserted/removed by React
       selectionObserver.observe(container, { childList: true, subtree: true })
       setCount(getSelectedDocumentCount())
     }
