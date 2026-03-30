@@ -1,6 +1,8 @@
 import { defineConfig } from 'wxt';
 import tailwindcss from '@tailwindcss/vite';
 
+const betterAuthBaseUrl = (import.meta.env.WXT_BETTER_AUTH_BASE_URL || 'http://localhost:3000').replace(/\/+$/, '');
+
 // See https://wxt.dev/api/config.html
 export default defineConfig({
   modules: ['@wxt-dev/module-react'],
@@ -20,7 +22,7 @@ export default defineConfig({
   manifest: () => ({
     name: 'ThinkEx-Extension',
     host_permissions: [
-      `${import.meta.env.WXT_BETTER_AUTH_BASE_URL || 'http://localhost:3000'}/*`,
+      `${betterAuthBaseUrl}/*`,
       'https://*/*',
     ],
     permissions: ['storage'],
@@ -28,7 +30,7 @@ export default defineConfig({
       {
         resources: ['callback.html'],
         matches: [
-          `${import.meta.env.WXT_BETTER_AUTH_BASE_URL || 'http://localhost:3000'}/*`,
+          `${betterAuthBaseUrl}/*`,
           'https://thinkex.app/*',
         ],
       },
