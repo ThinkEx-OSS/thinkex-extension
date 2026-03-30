@@ -47,6 +47,7 @@ interface SessionData {
 
 const BANNER_KEY = "banner_enabled"
 const SUPPORTED_DOC_RE = /\.(pdf|docx?|pptx?)$/i
+const SIGN_IN_POLL_TIMEOUT_MS = 2 * 60 * 1000
 
 function buildFolderTree(folders: FolderItem[], parentId?: string): FolderTreeItem[] {
   return folders
@@ -268,7 +269,7 @@ export function ExtensionSidebar() {
   const [foldersByWorkspace, setFoldersByWorkspace] = React.useState<
     Record<string, FolderItem[]>
   >({})
-  const [loadingFolderForId, setLoadingFolderForId] = React.useState<string | null>(null)
+  const [loadingFolderIds, setLoadingFolderIds] = React.useState<Set<string>>(new Set())
 
   // Selection state
   const [openWorkspaceIds, setOpenWorkspaceIds] = React.useState<Set<string>>(new Set())
@@ -277,6 +278,16 @@ export function ExtensionSidebar() {
 
   const widgetRef = React.useRef<HTMLDivElement>(null)
   const tabRef = React.useRef<HTMLDivElement>(null)
+  const foldersByWorkspaceRef = React.useRef(foldersByWorkspace)
+  const loadingFolderIdsRef = React.useRef(loadingFolderIds)
+
+  React.useEffect(() => {
+    foldersByWorkspaceRef.current = foldersByWorkspace
+  }, [foldersByWorkspace])
+
+  React.useEffect(() => {
+    loadingFolderIdsRef.current = loadingFolderIds
+  }, [loadingFolderIds])
 
   // ── banner_enabled toggle ───────────────────────────────────────────────
   React.useEffect(() => {
@@ -335,28 +346,40 @@ export function ExtensionSidebar() {
     }
   }, [session])
 
+  const loadFolders = React.useCallback(async (wsId: string) => {
+    if (foldersByWorkspaceRef.current[wsId] || loadingFolderIdsRef.current.has(wsId)) return
+
+    const nextLoadingIds = new Set(loadingFolderIdsRef.current)
+    nextLoadingIds.add(wsId)
+    loadingFolderIdsRef.current = nextLoadingIds
+    setLoadingFolderIds(nextLoadingIds)
+
+    try {
+      const response = await sendMessage<{ folders?: Array<{ id: string; name: string; folderId?: string; color?: string }> }>({
+        type: "FETCH_WORKSPACE_FOLDERS",
+        id: wsId,
+      })
+      const folders: Array<{ id: string; name: string; folderId?: string; color?: string }> =
+        response?.folders ?? []
+      setFoldersByWorkspace((prev) => ({ ...prev, [wsId]: folders }))
+    } catch {
+      setFoldersByWorkspace((prev) => ({ ...prev, [wsId]: [] }))
+    } finally {
+      const remainingLoadingIds = new Set(loadingFolderIdsRef.current)
+      remainingLoadingIds.delete(wsId)
+      loadingFolderIdsRef.current = remainingLoadingIds
+      setLoadingFolderIds(remainingLoadingIds)
+    }
+  }, [])
+
   // ── Prefetch folders as soon as workspaces load (if banner is enabled) ──
   React.useEffect(() => {
     if (!enabled || workspaces.length === 0) return
 
     workspaces.forEach((ws) => {
-      if (ws.id in foldersByWorkspace) return
-
-      void (async () => {
-        try {
-          const response = await sendMessage<{ folders?: Array<{ id: string; name: string; folderId?: string; color?: string }> }>({
-            type: "FETCH_WORKSPACE_FOLDERS",
-            id: ws.id,
-          })
-          const folders: Array<{ id: string; name: string; folderId?: string; color?: string }> =
-            response?.folders ?? []
-          setFoldersByWorkspace((prev) => ({ ...prev, [ws.id]: folders }))
-        } catch {
-          setFoldersByWorkspace((prev) => ({ ...prev, [ws.id]: [] }))
-        }
-      })()
+      void loadFolders(ws.id)
     })
-  }, [enabled, workspaces])
+  }, [enabled, workspaces, loadFolders])
 
   // ── Watch Canvas file list for selection changes (old + new UI) ─────────
   React.useEffect(() => {
@@ -477,6 +500,12 @@ export function ExtensionSidebar() {
   const handleSignIn = React.useCallback(() => {
     setSigningIn(true)
     const authWindow = window.open("", "_blank", "noopener,noreferrer")
+    const startedAt = Date.now()
+
+    if (pollRef.current) {
+      clearTimeout(pollRef.current)
+      pollRef.current = null
+    }
 
     void (async () => {
       try {
@@ -485,10 +514,25 @@ export function ExtensionSidebar() {
           callbackURL: browser.runtime.getURL("/callback.html" as any),
         })
         const url = response?.url
-        if (url && authWindow) authWindow.location.href = url
+        if (!authWindow || !url) {
+          setSigningIn(false)
+          return
+        }
+
+        authWindow.location.href = url
 
         // Poll until session appears
         const poll = async () => {
+          if (pollRef.current) {
+            clearTimeout(pollRef.current)
+            pollRef.current = null
+          }
+
+          if (authWindow.closed || Date.now() - startedAt >= SIGN_IN_POLL_TIMEOUT_MS) {
+            setSigningIn(false)
+            return
+          }
+
           try {
             const res = await sendMessage<{ session?: SessionData | null }>({
               type: "GET_SESSION",
@@ -506,6 +550,10 @@ export function ExtensionSidebar() {
 
         pollRef.current = setTimeout(poll, 1500)
       } catch {
+        if (pollRef.current) {
+          clearTimeout(pollRef.current)
+          pollRef.current = null
+        }
         setSigningIn(false)
       }
     })()
@@ -529,27 +577,11 @@ export function ExtensionSidebar() {
       })
 
       // Lazy-load folders on first expand
-      if (!isCurrentlyOpen && !(wsId in foldersByWorkspace) && loadingFolderForId !== wsId) {
-        setLoadingFolderForId(wsId)
-
-        void (async () => {
-          try {
-            const response = await sendMessage<{ folders?: Array<{ id: string; name: string; folderId?: string; color?: string }> }>({
-              type: "FETCH_WORKSPACE_FOLDERS",
-              id: wsId,
-            })
-            const folders: Array<{ id: string; name: string; folderId?: string; color?: string }> =
-              response?.folders ?? []
-            setFoldersByWorkspace((prev) => ({ ...prev, [wsId]: folders }))
-          } catch {
-            setFoldersByWorkspace((prev) => ({ ...prev, [wsId]: [] }))
-          } finally {
-            setLoadingFolderForId(null)
-          }
-        })()
+      if (!isCurrentlyOpen) {
+        void loadFolders(wsId)
       }
     },
-    [openWorkspaceIds, foldersByWorkspace, loadingFolderForId]
+    [openWorkspaceIds, loadFolders]
   )
 
   const selectFolder = React.useCallback((id: string) => {
@@ -615,58 +647,72 @@ export function ExtensionSidebar() {
         storagePath: string; publicUrl: string
         displayName: string; mimeType: string; folderId?: string
       }
+      const abortController = new AbortController()
+      let failed = false
 
       const processFile = async (file: { url: string; name: string }): Promise<ImportFile> => {
+        if (failed) throw new Error('Send cancelled')
+
         const mimeType = mimeTypeFromFilename(file.name)
 
-        // Download from Canvas and request the upload URL at the same time.
-        const [canvasResp, urlResult] = await Promise.all([
-          fetch(file.url, { credentials: 'include' }),
-          sendMessage<UploadUrlResponse>({
-            type: 'GET_UPLOAD_URL', filename: file.name, contentType: mimeType,
-          }),
-        ])
+        try {
+          // Download from Canvas and request the upload URL at the same time.
+          const [canvasResp, urlResult] = await Promise.all([
+            fetch(file.url, { credentials: 'include', signal: abortController.signal }),
+            sendMessage<UploadUrlResponse>({
+              type: 'GET_UPLOAD_URL', filename: file.name, contentType: mimeType,
+            }),
+          ])
 
-        if (!canvasResp.ok) throw new Error(`Failed to download "${file.name}" from Canvas`)
-        const blob = await canvasResp.blob()
+          if (failed) throw new Error('Send cancelled')
+          if (!canvasResp.ok) throw new Error(`Failed to download "${file.name}" from Canvas`)
+          const blob = await canvasResp.blob()
 
-        if (!urlResult.ok) throw new Error(`Upload URL error for "${file.name}": ${urlResult.error}`)
+          if (failed) throw new Error('Send cancelled')
+          if (!urlResult.ok) throw new Error(`Upload URL error for "${file.name}": ${urlResult.error}`)
 
-        const { signedUrl, publicUrl, path } = urlResult.data
+          const { signedUrl, publicUrl, path } = urlResult.data
 
-        // PUT directly to Supabase — pre-signed, no auth needed.
-        const putResp = await fetch(signedUrl, {
-          method: 'PUT',
-          headers: { 'Content-Type': mimeType },
-          body: blob,
-        })
-        if (!putResp.ok) throw new Error(`Storage upload failed for "${file.name}"`)
-        const storagePath = path
-        const storageUrl = publicUrl
-
-        // 4. Convert office files to PDF via ThinkEx engine
-        let finalPath = storagePath
-        let finalUrl = storageUrl
-        let finalMime = mimeType
-        let finalName = file.name
-
-        if (isOfficeFile(file.name)) {
-          const convResult = await sendMessage<UploadUrlResponse>({
-            type: 'CONVERT_TO_PDF', filePath: storagePath, fileUrl: storageUrl,
+          // PUT directly to Supabase — pre-signed, no auth needed.
+          const putResp = await fetch(signedUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': mimeType },
+            body: blob,
+            signal: abortController.signal,
           })
-          if (!convResult.ok) throw new Error(`Conversion failed for "${file.name}": ${convResult.error}`)
-          finalPath = convResult.data.pdf_path
-          finalUrl = convResult.data.pdf_url
-          finalMime = 'application/pdf'
-          finalName = toPdfName(file.name)
-        }
+          if (failed) throw new Error('Send cancelled')
+          if (!putResp.ok) throw new Error(`Storage upload failed for "${file.name}"`)
+          const storagePath = path
+          const storageUrl = publicUrl
 
-        return {
-          storagePath: finalPath,
-          publicUrl: finalUrl,
-          displayName: finalName,
-          mimeType: finalMime,
-          folderId: destFolderId,
+          // 4. Convert office files to PDF via ThinkEx engine
+          let finalPath = storagePath
+          let finalUrl = storageUrl
+          let finalMime = mimeType
+          let finalName = file.name
+
+          if (isOfficeFile(file.name)) {
+            const convResult = await sendMessage<UploadUrlResponse>({
+              type: 'CONVERT_TO_PDF', filePath: storagePath, fileUrl: storageUrl,
+            })
+            if (failed) throw new Error('Send cancelled')
+            if (!convResult.ok) throw new Error(`Conversion failed for "${file.name}": ${convResult.error}`)
+            finalPath = convResult.data.pdf_path
+            finalUrl = convResult.data.pdf_url
+            finalMime = 'application/pdf'
+            finalName = toPdfName(file.name)
+          }
+
+          return {
+            storagePath: finalPath,
+            publicUrl: finalUrl,
+            displayName: finalName,
+            mimeType: finalMime,
+            folderId: destFolderId,
+          }
+        } catch (err) {
+          if (abortController.signal.aborted || failed) throw new Error('Send cancelled')
+          throw err
         }
       }
 
@@ -677,11 +723,23 @@ export function ExtensionSidebar() {
       const workerCount = Math.min(MAX_CONCURRENT_FILE_SENDS, selectedFiles.length)
       await Promise.all(
         Array.from({ length: workerCount }, async () => {
-          while (nextFileIdx < selectedFiles.length) {
+          while (!failed && nextFileIdx < selectedFiles.length) {
             const fileIdx = nextFileIdx++
-            importFiles[fileIdx] = await processFile(selectedFiles[fileIdx])
-            completedFiles += 1
-            setSendProgress({ current: completedFiles, total: selectedFiles.length })
+            if (failed) return
+
+            try {
+              importFiles[fileIdx] = await processFile(selectedFiles[fileIdx])
+              if (failed) return
+              completedFiles += 1
+              setSendProgress({ current: completedFiles, total: selectedFiles.length })
+            } catch (err) {
+              if (!failed) {
+                failed = true
+                abortController.abort()
+                throw err
+              }
+              return
+            }
           }
         }),
       )
@@ -867,7 +925,7 @@ export function ExtensionSidebar() {
                 const isOpen = openWorkspaceIds.has(ws.id)
                 const rawFolders = foldersByWorkspace[ws.id]
                 const folders = rawFolders ? buildFolderTree(rawFolders) : null
-                const isLoadingFolders = loadingFolderForId === ws.id
+                const isLoadingFolders = loadingFolderIds.has(ws.id)
 
                 return (
                   <Collapsible.Root
