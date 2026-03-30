@@ -39,9 +39,14 @@ interface FolderTreeItem {
   children?: FolderTreeItem[]
 }
 
+interface SessionData {
+  user: { email: string; name?: string }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const BANNER_KEY = "banner_enabled"
+const SUPPORTED_DOC_RE = /\.(pdf|docx?|pptx?)$/i
 
 function buildFolderTree(folders: FolderItem[], parentId?: string): FolderTreeItem[] {
   return folders
@@ -52,24 +57,42 @@ function buildFolderTree(folders: FolderItem[], parentId?: string): FolderTreeIt
     })
 }
 
+function getSupportedFilename(rawName?: string | null): string | null {
+  const name = rawName?.trim()
+  return name && SUPPORTED_DOC_RE.test(name) ? name : null
+}
+
+function getAnchorFilename(anchor: HTMLAnchorElement | null): string | null {
+  if (!anchor) return null
+
+  return (
+    getSupportedFilename(anchor.textContent) ??
+    getSupportedFilename(anchor.getAttribute("aria-label")) ??
+    getSupportedFilename(anchor.getAttribute("title"))
+  )
+}
+
 function getSelectedDocumentCount(): number {
   // Old Canvas UI (Ember-based)
   const oldCount = document.querySelectorAll(
-    '.ef-item-row[aria-selected="true"] .mimeClass-pdf, ' +
-    '.ef-item-row[aria-selected="true"] .mimeClass-doc, ' +
-    '.ef-item-row[aria-selected="true"] .mimeClass-ppt'
-  ).length
+    ".ef-item-row[aria-selected=\"true\"]"
+  )
+
+  const oldSelectedCount = Array.from(oldCount).filter((row) => {
+    const anchor = row.querySelector<HTMLAnchorElement>(".ef-name-col__link")
+    return Boolean(getAnchorFilename(anchor))
+  }).length
 
   // New Canvas UI (React-based) — selection shown by IconCheckMark SVG presence
   const newCount = Array.from(
-    document.querySelectorAll<HTMLElement>('tr[data-testid="table-row"]')
+    document.querySelectorAll<HTMLElement>("tr")
   ).filter((row) => {
     if (!row.querySelector('svg[name="IconCheckMark"]')) return false
-    const name = row.querySelector<HTMLAnchorElement>('[data-testid="table-cell-name"] a')?.getAttribute('data-testid') ?? ''
-    return /\.(pdf|docx?|pptx?)$/i.test(name)
+    const anchor = row.querySelector<HTMLAnchorElement>('a[href*="preview="]')
+    return Boolean(getAnchorFilename(anchor))
   }).length
 
-  return oldCount + newCount
+  return oldSelectedCount + newCount
 }
 
 function getSelectedFiles(): Array<{ url: string; name: string }> {
@@ -78,19 +101,19 @@ function getSelectedFiles(): Array<{ url: string; name: string }> {
     document.querySelectorAll<HTMLElement>('.ef-item-row[aria-selected="true"]')
   ).flatMap((row) => {
     const url = row.querySelector<HTMLAnchorElement>('.ef-name-col__link')?.getAttribute('href')
-    const name = row.querySelector<HTMLElement>('.ef-name-col__text')?.textContent?.trim()
+    const name = getAnchorFilename(row.querySelector<HTMLAnchorElement>(".ef-name-col__link"))
     if (!url || !name) return []
     return [{ url, name }]
   })
 
   // New Canvas UI (React-based) — selection shown by IconCheckMark SVG presence
   const newFiles = Array.from(
-    document.querySelectorAll<HTMLElement>('tr[data-testid="table-row"]')
+    document.querySelectorAll<HTMLElement>("tr")
   ).flatMap((row) => {
     if (!row.querySelector('svg[name="IconCheckMark"]')) return []
-    const anchor = row.querySelector<HTMLAnchorElement>('[data-testid="table-cell-name"] a')
+    const anchor = row.querySelector<HTMLAnchorElement>('a[href*="preview="]')
     if (!anchor) return []
-    const name = anchor.getAttribute('data-testid')
+    const name = getAnchorFilename(anchor)
     const href = anchor.getAttribute('href')
     if (!name || !href) return []
     const previewMatch = href.match(/[?&]preview=(\d+)/)
@@ -125,16 +148,8 @@ function toPdfName(name: string): string {
 
 const MAX_CONCURRENT_FILE_SENDS = 3
 
-function sendMessage<T>(msg: Record<string, unknown>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    browser.runtime.sendMessage(msg, (response) => {
-      if (browser.runtime.lastError) {
-        reject(new Error(browser.runtime.lastError.message))
-      } else {
-        resolve(response as T)
-      }
-    })
-  })
+async function sendMessage<T>(msg: Record<string, unknown>): Promise<T> {
+  return await browser.runtime.sendMessage(msg) as T
 }
 
 // ── Folder tree component ─────────────────────────────────────────────────────
@@ -227,7 +242,7 @@ function FolderTree({
 
 export function ExtensionSidebar() {
   // Session state
-  const [session, setSession] = React.useState<{ user: { email: string; name?: string } } | null>(null)
+  const [session, setSession] = React.useState<SessionData | null>(null)
   const [sessionLoading, setSessionLoading] = React.useState(true)
   const [signingIn, setSigningIn] = React.useState(false)
   const pollRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -277,35 +292,69 @@ export function ExtensionSidebar() {
 
   // ── Session check ───────────────────────────────────────────────────────
   React.useEffect(() => {
-    browser.runtime.sendMessage({ type: "GET_SESSION" }, (response) => {
-      setSession(response?.session?.user ? response.session : null)
-      setSessionLoading(false)
-    })
-    return () => { if (pollRef.current) clearTimeout(pollRef.current) }
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const response = await sendMessage<{ session?: SessionData | null }>({
+          type: "GET_SESSION",
+        })
+        if (!cancelled) setSession(response?.session?.user ? response.session : null)
+      } catch {
+        if (!cancelled) setSession(null)
+      } finally {
+        if (!cancelled) setSessionLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      if (pollRef.current) clearTimeout(pollRef.current)
+    }
   }, [])
 
   // ── Fetch workspace list ────────────────────────────────────────────────
   React.useEffect(() => {
     if (!session) return
-    browser.runtime.sendMessage({ type: "FETCH_WORKSPACES" }, (response) => {
-      setWorkspaces(response?.workspaces ?? [])
-      setWorkspacesLoading(false)
-    })
+
+    let cancelled = false
+
+    void (async () => {
+      try {
+        const response = await sendMessage<{ workspaces?: Workspace[] }>({ type: "FETCH_WORKSPACES" })
+        if (!cancelled) setWorkspaces(response?.workspaces ?? [])
+      } catch {
+        if (!cancelled) setWorkspaces([])
+      } finally {
+        if (!cancelled) setWorkspacesLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
   }, [session])
 
   // ── Prefetch folders as soon as workspaces load (if banner is enabled) ──
   React.useEffect(() => {
     if (!enabled || workspaces.length === 0) return
+
     workspaces.forEach((ws) => {
       if (ws.id in foldersByWorkspace) return
-      browser.runtime.sendMessage(
-        { type: "FETCH_WORKSPACE_FOLDERS", id: ws.id },
-        (response) => {
+
+      void (async () => {
+        try {
+          const response = await sendMessage<{ folders?: Array<{ id: string; name: string; folderId?: string; color?: string }> }>({
+            type: "FETCH_WORKSPACE_FOLDERS",
+            id: ws.id,
+          })
           const folders: Array<{ id: string; name: string; folderId?: string; color?: string }> =
             response?.folders ?? []
           setFoldersByWorkspace((prev) => ({ ...prev, [ws.id]: folders }))
+        } catch {
+          setFoldersByWorkspace((prev) => ({ ...prev, [ws.id]: [] }))
         }
-      )
+      })()
     })
   }, [enabled, workspaces])
 
@@ -427,26 +476,39 @@ export function ExtensionSidebar() {
   // ── Sign in ─────────────────────────────────────────────────────────────
   const handleSignIn = React.useCallback(() => {
     setSigningIn(true)
-    browser.runtime.sendMessage(
-      { type: "SIGN_IN_SOCIAL", callbackURL: browser.runtime.getURL("/callback.html" as any) },
-      (response) => {
+    const authWindow = window.open("", "_blank", "noopener,noreferrer")
+
+    void (async () => {
+      try {
+        const response = await sendMessage<{ url?: string }>({
+          type: "SIGN_IN_SOCIAL",
+          callbackURL: browser.runtime.getURL("/callback.html" as any),
+        })
         const url = response?.url
-        if (url) window.open(url, "_blank")
+        if (url && authWindow) authWindow.location.href = url
 
         // Poll until session appears
-        const poll = () => {
-          browser.runtime.sendMessage({ type: "GET_SESSION" }, (res) => {
+        const poll = async () => {
+          try {
+            const res = await sendMessage<{ session?: SessionData | null }>({
+              type: "GET_SESSION",
+            })
             if (res?.session?.user) {
               setSession(res.session)
               setSigningIn(false)
             } else {
               pollRef.current = setTimeout(poll, 1500)
             }
-          })
+          } catch {
+            setSigningIn(false)
+          }
         }
+
         pollRef.current = setTimeout(poll, 1500)
+      } catch {
+        setSigningIn(false)
       }
-    )
+    })()
   }, [])
 
   // ── Select workspace as destination ────────────────────────────────────
@@ -469,15 +531,22 @@ export function ExtensionSidebar() {
       // Lazy-load folders on first expand
       if (!isCurrentlyOpen && !(wsId in foldersByWorkspace) && loadingFolderForId !== wsId) {
         setLoadingFolderForId(wsId)
-        browser.runtime.sendMessage(
-          { type: "FETCH_WORKSPACE_FOLDERS", id: wsId },
-          (response) => {
+
+        void (async () => {
+          try {
+            const response = await sendMessage<{ folders?: Array<{ id: string; name: string; folderId?: string; color?: string }> }>({
+              type: "FETCH_WORKSPACE_FOLDERS",
+              id: wsId,
+            })
             const folders: Array<{ id: string; name: string; folderId?: string; color?: string }> =
               response?.folders ?? []
             setFoldersByWorkspace((prev) => ({ ...prev, [wsId]: folders }))
+          } catch {
+            setFoldersByWorkspace((prev) => ({ ...prev, [wsId]: [] }))
+          } finally {
             setLoadingFolderForId(null)
           }
-        )
+        })()
       }
     },
     [openWorkspaceIds, foldersByWorkspace, loadingFolderForId]
@@ -709,7 +778,10 @@ export function ExtensionSidebar() {
         <div className="flex items-center gap-2 px-4 h-12 border-b border-sidebar-border shrink-0">
           <button
             className="flex items-center gap-2 flex-1 min-w-0 hover:opacity-75 transition-opacity cursor-pointer"
-            onClick={() => window.open("https://thinkex.app", "_blank")}
+            onClick={() => {
+              const thinkexWindow = window.open("", "_blank", "noopener,noreferrer")
+              if (thinkexWindow) thinkexWindow.location.href = "https://thinkex.app"
+            }}
           >
             <img
               src={browser.runtime.getURL("ThinkExLogo.svg" as any)}

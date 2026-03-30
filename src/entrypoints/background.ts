@@ -33,6 +33,28 @@ function writeSession<T>(key: string, entry: CacheEntry<T>): void {
   browser.storage.session.set({ [key]: entry }).catch(() => {});
 }
 
+async function parseResponsePayload(r: Response): Promise<unknown> {
+  const contentType = r.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    return await r.json();
+  }
+
+  const text = await r.text();
+  return text || null;
+}
+
+function getResponseError(payload: unknown, status: number, statusText: string): string {
+  if (typeof payload === 'string' && payload.trim()) return payload;
+
+  if (payload && typeof payload === 'object') {
+    const candidate = (payload as Record<string, unknown>).error
+      ?? (payload as Record<string, unknown>).message;
+    if (typeof candidate === 'string' && candidate.trim()) return candidate;
+  }
+
+  return `Request failed (${status} ${statusText})`;
+}
+
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
@@ -123,8 +145,14 @@ export default defineBackground(() => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filename: message.filename, contentType: message.contentType }),
       })
-        .then((r) => r.json())
-        .then((data) => sendResponse({ ok: true, data }))
+        .then(async (r) => {
+          const payload = await parseResponsePayload(r);
+          if (!r.ok) {
+            sendResponse({ ok: false, error: getResponseError(payload, r.status, r.statusText), data: payload });
+            return;
+          }
+          sendResponse({ ok: true, data: payload });
+        })
         .catch((err) => sendResponse({ ok: false, error: err?.message ?? 'Unknown error' }));
       return true;
     }
@@ -136,8 +164,14 @@ export default defineBackground(() => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ file_path: message.filePath, file_url: message.fileUrl }),
       })
-        .then((r) => r.json())
-        .then((data) => sendResponse({ ok: true, data }))
+        .then(async (r) => {
+          const payload = await parseResponsePayload(r);
+          if (!r.ok) {
+            sendResponse({ ok: false, error: getResponseError(payload, r.status, r.statusText), data: payload });
+            return;
+          }
+          sendResponse({ ok: true, data: payload });
+        })
         .catch((err) => sendResponse({ ok: false, error: err?.message ?? 'Unknown error' }));
       return true;
     }
@@ -149,8 +183,14 @@ export default defineBackground(() => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ files: message.files }),
       })
-        .then((r) => r.json())
-        .then((data) => sendResponse({ ok: true, data }))
+        .then(async (r) => {
+          const payload = await parseResponsePayload(r);
+          if (!r.ok) {
+            sendResponse({ ok: false, error: getResponseError(payload, r.status, r.statusText), data: payload });
+            return;
+          }
+          sendResponse({ ok: true, data: payload });
+        })
         .catch((err) => sendResponse({ ok: false, error: err?.message ?? 'Unknown error' }));
       return true;
     }
