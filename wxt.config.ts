@@ -18,6 +18,7 @@ export default defineConfig({
     ],
   },
   manifest: () => ({
+    name: 'ThinkEx-Extension',
     host_permissions: [
       `${import.meta.env.WXT_BETTER_AUTH_BASE_URL || 'http://localhost:3000'}/*`,
       'https://*/*',

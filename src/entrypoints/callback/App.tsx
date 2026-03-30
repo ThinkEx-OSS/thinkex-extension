@@ -29,7 +29,7 @@ export default function App() {
     if (status === 'success') return (
         <div>
             <p className="text-green-500 font-semibold">Successfully signed in as {displayName}!</p>
-            <p className="text-gray-400">You can close this tab and open the extension popup.</p>
+            <p className="text-gray-400">You can close this tab and return to the ThinkEx sidebar in Canvas.</p>
         </div>
     );
     return <p>No session found. You can close this tab.</p>;

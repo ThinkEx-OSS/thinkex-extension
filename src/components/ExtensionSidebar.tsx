@@ -515,6 +515,13 @@ export function ExtensionSidebar() {
         })
         const url = response?.url
         if (!authWindow || !url) {
+          if (authWindow && !authWindow.closed) {
+            try {
+              authWindow.close()
+            } catch {
+              // Ignore close errors if the popup was already closed.
+            }
+          }
           setSigningIn(false)
           return
         }

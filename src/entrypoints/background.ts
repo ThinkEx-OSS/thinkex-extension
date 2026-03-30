@@ -96,6 +96,14 @@ export default defineBackground(() => {
         // 3. Network fetch — cache the result for subsequent opens
         try {
           const r = await fetch(`${BASE_URL}/api/workspaces`, { credentials: 'include' });
+          if (!r.ok) {
+            const payload = await parseResponsePayload(r);
+            sendResponse({
+              workspaces: [],
+              error: getResponseError(payload, r.status, r.statusText),
+            });
+            return;
+          }
           const data = await r.json();
           const entry: CacheEntry<any[]> = { data: data.workspaces ?? [], fetchedAt: Date.now() };
           memCache.workspaces = entry;
@@ -126,6 +134,14 @@ export default defineBackground(() => {
         // 3. Network fetch
         try {
           const r = await fetch(`${BASE_URL}/api/workspaces/${wsId}/folders`, { credentials: 'include' });
+          if (!r.ok) {
+            const payload = await parseResponsePayload(r);
+            sendResponse({
+              folders: [],
+              error: getResponseError(payload, r.status, r.statusText),
+            });
+            return;
+          }
           const data = await r.json();
           const entry: CacheEntry<any[]> = { data: data.folders ?? [], fetchedAt: Date.now() };
           memCache.folders[wsId] = entry;
