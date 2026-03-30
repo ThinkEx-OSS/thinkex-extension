@@ -123,6 +123,8 @@ function toPdfName(name: string): string {
   return (dot !== -1 ? name.slice(0, dot) : name) + '.pdf'
 }
 
+const MAX_CONCURRENT_FILE_SENDS = 3
+
 function sendMessage<T>(msg: Record<string, unknown>): Promise<T> {
   return new Promise((resolve, reject) => {
     browser.runtime.sendMessage(msg, (response) => {
@@ -259,7 +261,7 @@ export function ExtensionSidebar() {
   const [selectedFolderId, setSelectedFolderId] = React.useState<string | null>(null)
 
   const widgetRef = React.useRef<HTMLDivElement>(null)
-  const tabRef = React.useRef<HTMLButtonElement>(null)
+  const tabRef = React.useRef<HTMLDivElement>(null)
 
   // ── banner_enabled toggle ───────────────────────────────────────────────
   React.useEffect(() => {
@@ -540,30 +542,30 @@ export function ExtensionSidebar() {
 
     try {
       type UploadUrlResponse = { ok: boolean; data: any; error?: string }
-      const importFiles: Array<{
+      type ImportFile = {
         storagePath: string; publicUrl: string
         displayName: string; mimeType: string; folderId?: string
-      }> = []
+      }
 
-      for (let fileIdx = 0; fileIdx < selectedFiles.length; fileIdx++) {
-        const file = selectedFiles[fileIdx]
-        setSendProgress({ current: fileIdx, total: selectedFiles.length })
+      const processFile = async (file: { url: string; name: string }): Promise<ImportFile> => {
         const mimeType = mimeTypeFromFilename(file.name)
 
-        // 1. Download file from Canvas (content script has Canvas session cookies)
-        const canvasResp = await fetch(file.url, { credentials: 'include' })
+        // Download from Canvas and request the upload URL at the same time.
+        const [canvasResp, urlResult] = await Promise.all([
+          fetch(file.url, { credentials: 'include' }),
+          sendMessage<UploadUrlResponse>({
+            type: 'GET_UPLOAD_URL', filename: file.name, contentType: mimeType,
+          }),
+        ])
+
         if (!canvasResp.ok) throw new Error(`Failed to download "${file.name}" from Canvas`)
         const blob = await canvasResp.blob()
 
-        // 2. Get upload URL via background (background has ThinkEx session cookies)
-        const urlResult = await sendMessage<UploadUrlResponse>({
-          type: 'GET_UPLOAD_URL', filename: file.name, contentType: mimeType,
-        })
         if (!urlResult.ok) throw new Error(`Upload URL error for "${file.name}": ${urlResult.error}`)
 
         const { signedUrl, publicUrl, path } = urlResult.data
 
-        // 3. PUT directly to Supabase — pre-signed, no auth needed
+        // PUT directly to Supabase — pre-signed, no auth needed.
         const putResp = await fetch(signedUrl, {
           method: 'PUT',
           headers: { 'Content-Type': mimeType },
@@ -590,8 +592,30 @@ export function ExtensionSidebar() {
           finalName = toPdfName(file.name)
         }
 
-        importFiles.push({ storagePath: finalPath, publicUrl: finalUrl, displayName: finalName, mimeType: finalMime, folderId: destFolderId })
+        return {
+          storagePath: finalPath,
+          publicUrl: finalUrl,
+          displayName: finalName,
+          mimeType: finalMime,
+          folderId: destFolderId,
+        }
       }
+
+      const importFiles: ImportFile[] = new Array(selectedFiles.length)
+      let nextFileIdx = 0
+      let completedFiles = 0
+
+      const workerCount = Math.min(MAX_CONCURRENT_FILE_SENDS, selectedFiles.length)
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          while (nextFileIdx < selectedFiles.length) {
+            const fileIdx = nextFileIdx++
+            importFiles[fileIdx] = await processFile(selectedFiles[fileIdx])
+            completedFiles += 1
+            setSendProgress({ current: completedFiles, total: selectedFiles.length })
+          }
+        }),
+      )
 
       // 4. Import all files into ThinkEx workspace
       setSendProgress(null)
@@ -865,7 +889,7 @@ export function ExtensionSidebar() {
             onClick={handleSend}
           >
             {sendProgress
-              ? `Uploading ${sendProgress.current + 1} of ${sendProgress.total}…`
+              ? `Uploading ${sendProgress.current} of ${sendProgress.total}…`
               : sending
               ? "Sending…"
               : "Send to ThinkEx"}
