@@ -570,11 +570,7 @@ export function ExtensionSidebar() {
           return
         }
 
-        const authWindow = window.open(url, "_blank")
-        if (!authWindow) {
-          setSigningIn(false)
-          return
-        }
+        window.open(url, "_blank", "noopener,noreferrer")
 
         // Poll until session appears
         const poll = async () => {
@@ -583,7 +579,7 @@ export function ExtensionSidebar() {
             pollRef.current = null
           }
 
-          if (authWindow.closed || Date.now() - startedAt >= SIGN_IN_POLL_TIMEOUT_MS) {
+          if (Date.now() - startedAt >= SIGN_IN_POLL_TIMEOUT_MS) {
             setSigningIn(false)
             return
           }
