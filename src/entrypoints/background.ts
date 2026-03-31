@@ -1,6 +1,7 @@
 import { authClient } from '@/utils/auth-client';
+import { getAppBaseUrl } from '@/utils/app-url';
 
-const BASE_URL = import.meta.env.WXT_BETTER_AUTH_BASE_URL || 'http://localhost:3000';
+const BASE_URL = getAppBaseUrl();
 
 // Cache TTL: 5 minutes. Stale data is returned instantly; fresh fetch happens only when expired.
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -62,6 +63,22 @@ export default defineBackground(() => {
       authClient.getSession()
         .then(({ data }) => sendResponse({ session: data }))
         .catch(() => sendResponse({ session: null }));
+      return true;
+    }
+
+    if (message.type === 'SIGN_OUT') {
+      authClient.signOut()
+        .then(async () => {
+          memCache.workspaces = null;
+          memCache.folders = {};
+          try {
+            await browser.storage.session.clear();
+          } catch {
+            // Ignore cache cleanup errors after sign-out.
+          }
+          sendResponse({ ok: true });
+        })
+        .catch((error) => sendResponse({ ok: false, error: error?.message ?? 'Sign out failed' }));
       return true;
     }
 
