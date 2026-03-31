@@ -1,10 +1,11 @@
 import * as React from "react"
 import * as Collapsible from "@radix-ui/react-collapsible"
-import { ChevronRight, Folder as FolderIcon, FolderOpen, X } from "lucide-react"
+import { ChevronRight, Folder as FolderIcon, FolderOpen, LogOut, Settings, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { IconRenderer } from "@/lib/icon-renderer"
+import { getAppBaseUrl } from "@/utils/app-url"
 import {
   SidebarProvider,
   SidebarMenu,
@@ -48,6 +49,7 @@ interface SessionData {
 const BANNER_KEY = "banner_enabled"
 const SUPPORTED_DOC_RE = /\.(pdf|docx?|pptx?)$/i
 const SIGN_IN_POLL_TIMEOUT_MS = 2 * 60 * 1000
+const APP_BASE_URL = getAppBaseUrl()
 
 function buildFolderTree(folders: FolderItem[], parentId?: string): FolderTreeItem[] {
   return folders
@@ -246,6 +248,7 @@ export function ExtensionSidebar() {
   const [session, setSession] = React.useState<SessionData | null>(null)
   const [sessionLoading, setSessionLoading] = React.useState(true)
   const [signingIn, setSigningIn] = React.useState(false)
+  const [signingOut, setSigningOut] = React.useState(false)
   const pollRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Extension state
@@ -262,6 +265,8 @@ export function ExtensionSidebar() {
 
   // Search
   const [searchQuery, setSearchQuery] = React.useState("")
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [settingsError, setSettingsError] = React.useState<string | null>(null)
 
   // Workspace + folder data
   const [workspaces, setWorkspaces] = React.useState<Workspace[]>([])
@@ -278,6 +283,8 @@ export function ExtensionSidebar() {
 
   const widgetRef = React.useRef<HTMLDivElement>(null)
   const tabRef = React.useRef<HTMLDivElement>(null)
+  const settingsRef = React.useRef<HTMLDivElement>(null)
+  const settingsButtonRef = React.useRef<HTMLButtonElement>(null)
   const foldersByWorkspaceRef = React.useRef(foldersByWorkspace)
   const loadingFolderIdsRef = React.useRef(loadingFolderIds)
 
@@ -324,11 +331,54 @@ export function ExtensionSidebar() {
     }
   }, [])
 
+  React.useEffect(() => {
+    if (settingsOpen) return
+    setSettingsError(null)
+  }, [settingsOpen])
+
+  React.useEffect(() => {
+    if (!settingsOpen) return
+
+    const onPointerDown = (event: PointerEvent) => {
+      const path = event.composedPath()
+      const clickedInsideMenu = settingsRef.current ? path.includes(settingsRef.current) : false
+      const clickedSettingsButton = settingsButtonRef.current ? path.includes(settingsButtonRef.current) : false
+
+      if (!clickedInsideMenu && !clickedSettingsButton) {
+        setSettingsOpen(false)
+      }
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsOpen(false)
+    }
+
+    document.addEventListener("pointerdown", onPointerDown)
+    document.addEventListener("keydown", onKeyDown)
+
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [settingsOpen])
+
   // ── Fetch workspace list ────────────────────────────────────────────────
   React.useEffect(() => {
-    if (!session) return
+    if (!session) {
+      setWorkspaces([])
+      setFoldersByWorkspace({})
+      setLoadingFolderIds(new Set())
+      loadingFolderIdsRef.current = new Set()
+      setOpenWorkspaceIds(new Set())
+      setOpenFolderIds(new Set())
+      setSelectedFolderId(null)
+      setWorkspacesLoading(false)
+      setSearchQuery("")
+      return
+    }
 
     let cancelled = false
+    setWorkspacesLoading(true)
 
     void (async () => {
       try {
@@ -498,8 +548,9 @@ export function ExtensionSidebar() {
 
   // ── Sign in ─────────────────────────────────────────────────────────────
   const handleSignIn = React.useCallback(() => {
+    setSettingsOpen(false)
+    setSettingsError(null)
     setSigningIn(true)
-    const authWindow = window.open("", "_blank", "noopener,noreferrer")
     const startedAt = Date.now()
 
     if (pollRef.current) {
@@ -514,19 +565,12 @@ export function ExtensionSidebar() {
           callbackURL: browser.runtime.getURL("/callback.html" as any),
         })
         const url = response?.url
-        if (!authWindow || !url) {
-          if (authWindow && !authWindow.closed) {
-            try {
-              authWindow.close()
-            } catch {
-              // Ignore close errors if the popup was already closed.
-            }
-          }
+        if (!url) {
           setSigningIn(false)
           return
         }
 
-        authWindow.location.href = url
+        window.open(url, "_blank", "noopener,noreferrer")
 
         // Poll until session appears
         const poll = async () => {
@@ -535,7 +579,7 @@ export function ExtensionSidebar() {
             pollRef.current = null
           }
 
-          if (authWindow.closed || Date.now() - startedAt >= SIGN_IN_POLL_TIMEOUT_MS) {
+          if (Date.now() - startedAt >= SIGN_IN_POLL_TIMEOUT_MS) {
             setSigningIn(false)
             return
           }
@@ -562,6 +606,39 @@ export function ExtensionSidebar() {
           pollRef.current = null
         }
         setSigningIn(false)
+      }
+    })()
+  }, [])
+
+  const handleSignOut = React.useCallback(() => {
+    setSigningOut(true)
+    setSettingsError(null)
+
+    void (async () => {
+      try {
+        const response = await sendMessage<{ ok?: boolean; error?: string }>({
+          type: "SIGN_OUT",
+        })
+
+        if (!response?.ok) {
+          setSettingsError(response?.error ?? "Sign out failed")
+          return
+        }
+
+        if (pollRef.current) {
+          clearTimeout(pollRef.current)
+          pollRef.current = null
+        }
+
+        setSession(null)
+        setSettingsOpen(false)
+        setSendError(null)
+        setSendSuccess(false)
+        setSendProgress(null)
+      } catch {
+        setSettingsError("Sign out failed")
+      } finally {
+        setSigningOut(false)
       }
     })()
   }, [])
@@ -840,12 +917,11 @@ export function ExtensionSidebar() {
       <div className="flex flex-col h-full w-full bg-sidebar border border-sidebar-border rounded-xl shadow-[0_8px_40px_rgba(0,0,0,0.45)] overflow-hidden">
 
         {/* Header — sticky, single row */}
-        <div className="flex items-center gap-2 px-4 h-12 border-b border-sidebar-border shrink-0">
+        <div className="relative flex items-center gap-2 px-4 h-12 border-b border-sidebar-border shrink-0">
           <button
-            className="flex items-center gap-2 flex-1 min-w-0 hover:opacity-75 transition-opacity cursor-pointer"
+            className="flex items-center gap-2 min-w-0 hover:opacity-75 transition-opacity cursor-pointer"
             onClick={() => {
-              const thinkexWindow = window.open("", "_blank", "noopener,noreferrer")
-              if (thinkexWindow) thinkexWindow.location.href = "https://thinkex.app"
+              window.open(APP_BASE_URL, "_blank", "noopener,noreferrer")
             }}
           >
             <img
@@ -858,12 +934,69 @@ export function ExtensionSidebar() {
               ThinkEx
             </h2>
           </button>
-          <button
-            className="text-sidebar-foreground/35 hover:text-sidebar-foreground/70 transition-colors cursor-pointer p-1 rounded"
-            onClick={() => setExpanded(false)}
-          >
-            <X className="size-4" />
-          </button>
+          <div className="flex-1" />
+          <div className="flex items-center gap-1">
+            <div ref={settingsRef}>
+              <button
+                ref={settingsButtonRef}
+                className="text-sidebar-foreground/35 hover:text-sidebar-foreground/70 transition-colors cursor-pointer p-1 rounded"
+                aria-label="Settings"
+                aria-expanded={settingsOpen}
+                aria-haspopup="menu"
+                type="button"
+                onClick={() => {
+                  setSettingsError(null)
+                  setSettingsOpen((prev) => !prev)
+                }}
+              >
+                <Settings className="size-4" />
+              </button>
+              {settingsOpen ? (
+                <div
+                  className="absolute right-4 top-10 z-10 w-36 overflow-hidden rounded-lg border border-sidebar-border bg-sidebar shadow-[0_14px_32px_rgba(0,0,0,0.42)]"
+                  role="menu"
+                >
+                  <div className="p-1.5">
+                    {session ? (
+                      <button
+                        className="w-full flex items-center gap-2 rounded-md px-2.5 py-2 text-xs text-sidebar-foreground hover:bg-sidebar-accent/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={handleSignOut}
+                        disabled={signingOut}
+                        type="button"
+                        role="menuitem"
+                      >
+                        <LogOut className="size-3.5 shrink-0" />
+                        {signingOut ? "Signing out…" : "Sign out"}
+                      </button>
+                    ) : (
+                      <button
+                        className="w-full flex items-center justify-center rounded-md px-2.5 py-2 text-xs text-sidebar-foreground hover:bg-sidebar-accent/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={handleSignIn}
+                        disabled={signingIn}
+                        type="button"
+                        role="menuitem"
+                      >
+                        {signingIn ? "Waiting for sign in…" : "Sign in"}
+                      </button>
+                    )}
+                  </div>
+                  {settingsError ? (
+                    <p className="border-t border-sidebar-border/80 px-3 py-2 text-[11px] leading-tight text-red-400 bg-red-500/5">
+                      {settingsError}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            <button
+              className="text-sidebar-foreground/35 hover:text-sidebar-foreground/70 transition-colors cursor-pointer p-1 rounded"
+              onClick={() => setExpanded(false)}
+              aria-label="Close sidebar"
+              type="button"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </div>
 
         {/* Search bar — fixed between header and list */}
